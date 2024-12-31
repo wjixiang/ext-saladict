@@ -74,6 +74,7 @@ export async function syncServiceUpload(
   activeServices.forEach(async (service, id) => {
     try {
       if (options.action === 'ADD') {
+        console.log('add:', options.words)
         await service.add({ words: options.words, force: options.force })
       } else if (options.action === 'DELETE') {
         await service.delete({ dates: options.dates, force: options.force })

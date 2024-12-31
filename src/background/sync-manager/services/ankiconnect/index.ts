@@ -1,3 +1,5 @@
+/* eslint-disable new-cap */
+/* eslint-disable no-undef */
 import axios from 'axios'
 import { Word } from '@/_helpers/record-manager'
 import { parseCtxText } from '@/_helpers/translateCtx'
@@ -5,6 +7,7 @@ import { AddConfig, SyncService } from '../../interface'
 import { getNotebook } from '../../helpers'
 import { message } from '@/_helpers/browser-api'
 import { Message } from '@/typings/message'
+import { YoudaoEN_T_ZH } from './youdao_pronunce'
 
 export interface SyncConfig {
   enable: boolean
@@ -31,8 +34,8 @@ export class Service extends SyncService<SyncConfig> {
       host: '127.0.0.1',
       port: '8765',
       key: null,
-      deckName: 'Saladict',
-      noteType: 'Saladict Word',
+      deckName: '英语',
+      noteType: '单词',
       tags: '',
       escapeContext: true,
       escapeTrans: true,
@@ -57,6 +60,7 @@ export class Service extends SyncService<SyncConfig> {
     if (!noteTypes?.includes(this.config.noteType)) {
       throw new Error('notetype')
     }
+    console.log('init success')
   }
 
   handleMessage = (msg: Message) => {
@@ -84,7 +88,7 @@ export class Service extends SyncService<SyncConfig> {
     }
     try {
       const notes = await this.request<number[]>('findNotes', {
-        query: `deck:${this.config.deckName} ${this.noteFileds[0]}:${date}`
+        query: `deck:${this.config.deckName} ${this.noteFileds[7]}:${date}`
       })
       return notes[0]
     } catch (e) {
@@ -101,6 +105,7 @@ export class Service extends SyncService<SyncConfig> {
 
     if (force) {
       words = await getNotebook()
+      console.log(words)
     }
 
     if (!words || words.length <= 0) {
@@ -134,18 +139,47 @@ export class Service extends SyncService<SyncConfig> {
   }
 
   async addWord(word: Readonly<Word>) {
-    return this.request<number | null>('addNote', {
-      note: {
-        deckName: this.config.deckName,
-        modelName: this.config.noteType,
-        options: {
-          allowDuplicate: false,
-          duplicateScope: 'deck'
-        },
-        tags: this.extractTags(),
-        fields: await this.wordToFields(word)
-      }
+    const pronouce_set = await new YoudaoEN_T_ZH().translate({
+      queryWord: word.text,
+      sourceLang: 'en',
+      targetLang: 'zh'
     })
+
+    if (pronouce_set) {
+      const requestParams = {
+        note: {
+          deckName: this.config.deckName,
+          modelName: this.config.noteType,
+          options: {
+            allowDuplicate: false,
+            duplicateScope: 'deck'
+          },
+          tags: this.extractTags(),
+          fields: {
+            ...(await this.wordToFields(word)),
+            Paraphrase: pronouce_set.paraphrase.main_paraphrase.paraphrase.join(
+              '\n'
+            ),
+            Pronounce: `[sound:${word.text}.mp3]`,
+            Phonetic: pronouce_set?.pronounce
+              .map(p => {
+                return p.name + p.phonetic
+              })
+              .join()
+          },
+          audio: [
+            {
+              url: pronouce_set?.pronounce[0].voiceLink,
+              filename: `${word.text}.mp3`,
+              skipHash: '7e2c2f954ef6051373ba916f000168dc',
+              fields: ['Pronunce']
+            }
+          ]
+        }
+      }
+      console.log('requestParams', requestParams)
+      return this.request<number | null>('addNote', requestParams)
+    }
   }
 
   async updateWord(noteId: number, word: Readonly<Word>) {
@@ -163,16 +197,14 @@ export class Service extends SyncService<SyncConfig> {
 
   async addNoteType() {
     this.noteFileds = [
-      'Date',
       'Text',
-      'Translation',
+      'Phonetic',
       'Context',
-      'ContextCloze',
-      'Note',
-      'Title',
-      'Url',
-      'Favicon',
-      'Audio'
+      'Paraphrase',
+      'Translation',
+      'Pronounce',
+      'url',
+      'Date'
     ]
 
     await this.request('createModel', {
@@ -206,7 +238,7 @@ export class Service extends SyncService<SyncConfig> {
 
   async request<R = void>(action: string, params?: any): Promise<R> {
     const { data } = await axios({
-      method: 'post',
+      method: 'post', // anki同步
       url: `http://${this.config.host}:${this.config.port}`,
       data: {
         key: this.config.key || null,
@@ -215,6 +247,8 @@ export class Service extends SyncService<SyncConfig> {
         params: params || {}
       }
     })
+    console.log('params', params)
+    console.log('restult', data)
 
     if (process.env.DEBUG) {
       console.log(`Anki Connect ${action} response`, data)
@@ -235,84 +269,102 @@ export class Service extends SyncService<SyncConfig> {
     if (!this.noteFileds) {
       this.noteFileds = await this.getNotefields()
     }
+
+    const pronouce_set = await new YoudaoEN_T_ZH().translate({
+      queryWord: word.text,
+      sourceLang: 'en',
+      targetLang: 'zh'
+    })
+    console.log('wordField:', this.noteFileds, word)
+    // console.log('youdao:', pronouce_set)
     return {
-      // Date
-      [this.noteFileds[0]]: `${word.date}`,
-      // Text
-      [this.noteFileds[1]]: word.text || '',
-      // Translation
-      [this.noteFileds[2]]: this.parseTrans(
-        word.trans,
-        this.config.escapeTrans
-      ),
-      // Context
-      [this.noteFileds[3]]: this.multiline(
-        word.context,
-        this.config.escapeContext
-      ),
-      // ContextCloze
-      [this.noteFileds[4]]:
+      // word
+      [this.noteFileds[0]]: `${word.text}`,
+      // phonic
+      [this.noteFileds[1]]: `${pronouce_set?.pronounce.map(p => {
+        return p.name + p.phonetic
+      })}`,
+      // context
+      [this.noteFileds[2]]:
         this.multiline(
-          word.context.split(word.text).join(`{{c1::${word.text}}}`),
+          word.context.split(word.text).join(`<b>${word.text}</b>`),
           this.config.escapeContext
-        ) || `{{c1::${word.text}}}`,
+        ) || `<b>${word.text}</b>`,
+      // Translation
+      [this.noteFileds[4]]: word.trans,
+      // Context
+      // [this.noteFileds[2]]: this.multiline(
+      //   word.context,
+      //   this.config.escapeContext
+      // ),
+      // ContextCloze
       // Note
-      [this.noteFileds[5]]: this.multiline(word.note, this.config.escapeNote),
+      // [this.noteFileds[5]]: this.multiline(word.note, this.config.escapeNote),
       // Title
-      [this.noteFileds[6]]: word.title || '',
       // Url
-      [this.noteFileds[7]]: word.url || '',
+      [this.noteFileds[6]]: word.url || '',
+      [this.noteFileds[7]]: `${word.date}`
       // Favicon
-      [this.noteFileds[8]]: word.favicon || '',
+      // [this.noteFileds[8]]: word.favicon || '',
       // Audio
-      [this.noteFileds[9]]: '' // @TODO
+      // [this.noteFileds[9]]: '' // @TODO
     }
   }
 
   async getNotefields(): Promise<string[]> {
-    const nf = await this.request<string[]>('modelFieldNames', {
-      modelName: this.config.noteType
-    })
+    return [
+      'Text',
+      'Phonetic',
+      'Context',
+      'Paraphrase',
+      'Translation',
+      'Pronounce',
+      'url',
+      'Date'
+    ]
+    // const nf = await this.request<string[]>('modelFieldNames', {
+    //   modelName: this.config.noteType
+    // })
 
-    // Anki connect bug
-    return nf?.includes('Date.')
-      ? [
-          'Date.',
-          'Text.',
-          'Translation.',
-          'Context.',
-          'ContextCloze.',
-          'Note.',
-          'Title.',
-          'Url.',
-          'Favicon.',
-          'Audio.'
-        ]
-      : nf?.includes('日期')
-      ? [
-          '日期',
-          '文字',
-          'Translation',
-          'Context',
-          'ContextCloze',
-          '笔记',
-          'Title',
-          'Url',
-          'Favicon',
-          'Audio'
-        ]
-      : [
-          'Date',
-          'Text',
-          'Translation',
-          'Context',
-          'ContextCloze',
-          'Note',
-          'Title',
-          'Url',
-          'Favicon',
-          'Audio'
-        ]
+    // // Anki connect bug
+    // return nf?.includes('Date.')
+    //   ? [
+    //       'Date.',
+    //       'Text.',
+    //       'Translation.',
+    //       'Context.',
+    //       'ContextCloze.',
+    //       'Note.',
+    //       'Title.',
+    //       'Url.',
+    //       'Favicon.',
+    //       'Audio.'
+    //     ]
+    //   : nf?.includes('日期')
+    //   ? [
+    //       '日期',
+    //       '文字',
+    //       'Translation',
+    //       'Context',
+    //       'ContextCloze',
+    //       '笔记',
+    //       'Title',
+    //       'Url',
+    //       'Favicon',
+    //       'Audio'
+    //     ]
+    //   : [
+    //       'Date',
+    //       'Text',
+    //       'Translation',
+    //       'Context',
+    //       'ContextCloze',
+    //       'Note',
+    //       'Title',
+    //       'Url',
+    //       'Favicon',
+    //       'Audio'
+    //     ]
   }
 
   multiline(text: string, escape: boolean): string {

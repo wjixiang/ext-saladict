@@ -28,6 +28,9 @@ export const AnkiConnectModal: FC<AnkiConnectModalProps> = props => {
   const { t, i18n } = useTranslate(['options', 'common', 'sync'])
   const [serviceChecking, setServiceChecking] = useState(false)
   const formRef = useRef<FormInstance>(null)
+  const getTemplate = () => {
+    return 'anki template'
+  }
 
   return (
     <Modal
@@ -58,6 +61,7 @@ export const AnkiConnectModal: FC<AnkiConnectModalProps> = props => {
         </Button>
       ]}
     >
+      <div>{getTemplate()}</div>
       <Form
         ref={formRef}
         initialValues={props.syncConfig || Service.getDefaultConfig()}
@@ -262,6 +266,7 @@ export const AnkiConnectModal: FC<AnkiConnectModalProps> = props => {
         await service.add({ force: true })
       }
     } catch (e) {
+      console.log('hi')
       notifyError(e)
     }
 
